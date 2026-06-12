@@ -1,4 +1,17 @@
 #!/usr/bin/env bun
+// Build the opencode CLI binary for one or more platforms.
+//
+// Usage:
+//   bun run build                  # all 14 platform variants
+//   bun run build --single         # current platform, native variant only
+//   bun run build --single linux-arm64
+//   bun run build --single linux-arm64-musl
+//   bun run build --single linux-x64-baseline
+//   bun run build --single linux-x64-musl-baseline
+//   bun run build --single win32   # all Windows variants
+//   bun run build --single darwin  # all macOS variants
+//   bun run build --single --skip-install  # skip re-installing native deps
+//   bun run build --single --sourcemaps    # include linked sourcemaps
 
 import { $ } from "bun"
 import fs from "fs"
@@ -17,7 +30,9 @@ const generated = await import("./generate.ts")
 import { Script } from "@opencode-ai/script"
 import pkg from "../package.json"
 
-const singleFlag = process.argv.includes("--single")
+const singleIdx = process.argv.indexOf("--single")
+const singleFlag = singleIdx !== -1
+const singleArg = singleFlag && process.argv[singleIdx + 1]?.startsWith?.("--") === false ? process.argv[singleIdx + 1] : undefined
 const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
 const sourcemapsFlag = process.argv.includes("--sourcemaps")
@@ -114,24 +129,42 @@ const allTargets: {
 ]
 
 const targets = singleFlag
-  ? allTargets.filter((item) => {
-      if (item.os !== process.platform || item.arch !== process.arch) {
-        return false
-      }
+  ? singleArg
+    ? allTargets.filter((item) => {
+        const parts = singleArg.split("-")
+        const wantOs = parts[0] === "windows" ? "win32" : parts[0]
+        if (item.os !== wantOs) return false
+        // If no arch given, match all archs for this OS (e.g. `--single win32`)
+        if (parts[1] && parts[1] !== item.arch) return false
+        // When arch is specified, match baseline/musl exactly
+        if (parts[1]) {
+          const hasBaseline = parts.includes("baseline")
+          const hasMusl = parts.includes("musl")
+          if (item.avx2 === false && !hasBaseline) return false
+          if (item.abi === "musl" && !hasMusl) return false
+          if (hasBaseline && item.avx2 !== false) return false
+          if (hasMusl && item.abi !== "musl") return false
+        }
+        return true
+      })
+    : allTargets.filter((item) => {
+        if (item.os !== process.platform || item.arch !== process.arch) {
+          return false
+        }
 
-      // When building for the current platform, prefer a single native binary by default.
-      // Baseline binaries require additional Bun artifacts and can be flaky to download.
-      if (item.avx2 === false) {
-        return baselineFlag
-      }
+        // When building for the current platform, prefer a single native binary by default.
+        // Baseline binaries require additional Bun artifacts and can be flaky to download.
+        if (item.avx2 === false) {
+          return baselineFlag
+        }
 
-      // also skip abi-specific builds for the same reason
-      if (item.abi !== undefined) {
-        return false
-      }
+        // also skip abi-specific builds for the same reason
+        if (item.abi !== undefined) {
+          return false
+        }
 
-      return true
-    })
+        return true
+      })
   : allTargets
 
 await $`rm -rf dist`
