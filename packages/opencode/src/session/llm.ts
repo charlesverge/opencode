@@ -29,6 +29,9 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
+import { Recorder } from "@/provider/recorder"
+import path from "path"
+import { Global } from "@opencode-ai/core/global"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
@@ -358,6 +361,11 @@ const live: Layer.Layer<
       Stream.scoped(
         Stream.unwrap(
           Effect.gen(function* () {
+            const dir = path.join(Global.Path.data, "recordings", input.sessionID, String(Date.now()))
+            const prev = Recorder.currentRecordDir.current
+            Recorder.currentRecordDir.current = dir
+            yield* Effect.addFinalizer(() => Effect.sync(() => { Recorder.currentRecordDir.current = prev }))
+
             const ctrl = yield* Effect.acquireRelease(
               Effect.sync(() => new AbortController()),
               (ctrl) => Effect.sync(() => ctrl.abort()),
@@ -393,7 +401,14 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Provider.defaultLayer),
     Layer.provide(Plugin.defaultLayer),
     Layer.provide(
-      LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer))),
+      LLMClient.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Recorder.recordingLayer.pipe(Layer.provide(RequestExecutor.defaultLayer)),
+            WebSocketExecutor.layer,
+          ),
+        ),
+      ),
     ),
     Layer.provide(RuntimeFlags.defaultLayer),
   ),
