@@ -33,6 +33,8 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ToolOutput, Usage, type LLMEvent } from "@opencode-ai/llm"
 
 const DOOM_LOOP_THRESHOLD = 3
+const TOOL_ABORT_EVENT_MESSAGE = "ETOOL001: Tool execution aborted"
+const TOOL_ABORT_PART_MESSAGE = "ETOOL002: Tool execution aborted"
 export type Result = "compact" | "stop" | "continue"
 
 export interface Handle {
@@ -368,6 +370,12 @@ export const layer = Layer.effect(
         }
       }
 
+      const jsonLength = (value: unknown) => {
+        if (typeof value === "string") return value.length
+        const serialized = JSON.stringify(value)
+        return serialized?.length ?? 0
+      }
+
       const handleEvent = Effect.fnUntraced(function* (value: StreamEvent) {
         switch (value.type) {
           case "reasoning-start":
@@ -436,13 +444,28 @@ export const layer = Layer.effect(
               const toolCall = yield* ensureToolCall(value)
               const assistantMessageID = mirrorAssistant ? yield* requireV2AssistantMessage(toolCall.call) : undefined
               if (assistantMessageID) {
-                yield* events.publish(SessionEvent.Tool.Input.Delta, {
-                  sessionID: ctx.sessionID,
-                  assistantMessageID,
-                  callID: value.id,
-                  delta: value.text,
-                  timestamp: DateTime.makeUnsafe(Date.now()),
-                })
+                yield* events
+                  .publish(SessionEvent.Tool.Input.Delta, {
+                    sessionID: ctx.sessionID,
+                    assistantMessageID,
+                    callID: value.id,
+                    delta: value.text,
+                    timestamp: DateTime.makeUnsafe(Date.now()),
+                  })
+                  .pipe(
+                    Effect.tapError((error) =>
+                      Effect.logError("tool input delta event publish failed", {
+                        code: "ETOOL001",
+                        "session.id": ctx.sessionID,
+                        messageID: ctx.assistantMessage.id,
+                        callID: value.id,
+                        tool: value.name,
+                        deltaLength: value.text.length,
+                        rawLength: toolCall.call.raw.length,
+                        error: errorMessage(error),
+                      }),
+                    ),
+                  )
               }
               ctx.toolcalls[value.id] = { ...toolCall.call, raw: toolCall.call.raw + value.text }
             }
@@ -453,13 +476,27 @@ export const layer = Layer.effect(
             // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
             if (mirrorAssistant) {
               const assistantMessageID = yield* requireV2AssistantMessage(toolCall.call)
-              yield* events.publish(SessionEvent.Tool.Input.Ended, {
-                sessionID: ctx.sessionID,
-                assistantMessageID,
-                callID: value.id,
-                text: toolCall.call.raw,
-                timestamp: DateTime.makeUnsafe(Date.now()),
-              })
+              yield* events
+                .publish(SessionEvent.Tool.Input.Ended, {
+                  sessionID: ctx.sessionID,
+                  assistantMessageID,
+                  callID: value.id,
+                  text: toolCall.call.raw,
+                  timestamp: DateTime.makeUnsafe(Date.now()),
+                })
+                .pipe(
+                  Effect.tapError((error) =>
+                    Effect.logError("tool input ended event publish failed", {
+                      code: "ETOOL001",
+                      "session.id": ctx.sessionID,
+                      messageID: ctx.assistantMessage.id,
+                      callID: value.id,
+                      tool: value.name,
+                      rawLength: toolCall.call.raw.length,
+                      error: errorMessage(error),
+                    }),
+                  ),
+                )
             }
             ctx.toolcalls[value.id] = { ...toolCall.call, inputEnded: true }
             return
@@ -475,30 +512,61 @@ export const layer = Layer.effect(
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               if (mirrorAssistant) {
                 const assistantMessageID = yield* requireV2AssistantMessage(toolCall.call)
-                yield* events.publish(SessionEvent.Tool.Input.Ended, {
-                  sessionID: ctx.sessionID,
-                  assistantMessageID,
-                  callID: value.id,
-                  text: toolCall.call.raw,
-                  timestamp: DateTime.makeUnsafe(Date.now()),
-                })
+                yield* events
+                  .publish(SessionEvent.Tool.Input.Ended, {
+                    sessionID: ctx.sessionID,
+                    assistantMessageID,
+                    callID: value.id,
+                    text: toolCall.call.raw,
+                    timestamp: DateTime.makeUnsafe(Date.now()),
+                  })
+                  .pipe(
+                    Effect.tapError((error) =>
+                      Effect.logError("tool implicit input ended event publish failed", {
+                        code: "ETOOL001",
+                        "session.id": ctx.sessionID,
+                        messageID: ctx.assistantMessage.id,
+                        callID: value.id,
+                        tool: value.name,
+                        rawLength: toolCall.call.raw.length,
+                        inputLength: jsonLength(input),
+                        error: errorMessage(error),
+                      }),
+                    ),
+                  )
               }
             }
             // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
             if (mirrorAssistant) {
               const assistantMessageID = yield* requireV2AssistantMessage(toolCall.call)
-              yield* events.publish(SessionEvent.Tool.Called, {
-                sessionID: ctx.sessionID,
-                assistantMessageID,
-                callID: value.id,
-                tool: value.name,
-                input,
-                provider: {
-                  executed: toolCall.part.metadata?.providerExecuted === true,
-                  ...(value.providerMetadata ? { metadata: value.providerMetadata } : {}),
-                },
-                timestamp: DateTime.makeUnsafe(Date.now()),
-              })
+              yield* events
+                .publish(SessionEvent.Tool.Called, {
+                  sessionID: ctx.sessionID,
+                  assistantMessageID,
+                  callID: value.id,
+                  tool: value.name,
+                  input,
+                  provider: {
+                    executed: toolCall.part.metadata?.providerExecuted === true,
+                    ...(value.providerMetadata ? { metadata: value.providerMetadata } : {}),
+                  },
+                  timestamp: DateTime.makeUnsafe(Date.now()),
+                })
+                .pipe(
+                  Effect.tapError((error) =>
+                    Effect.logError("tool called event publish failed", {
+                      code: "ETOOL001",
+                      "session.id": ctx.sessionID,
+                      messageID: ctx.assistantMessage.id,
+                      callID: value.id,
+                      tool: value.name,
+                      rawLength: toolCall.call.raw.length,
+                      inputLength: jsonLength(input),
+                      providerExecuted: toolCall.part.metadata?.providerExecuted === true,
+                      error: errorMessage(error),
+                    }),
+                  ),
+                )
             }
             yield* updateToolCall(value.id, (match) => ({
               ...match,
@@ -514,7 +582,21 @@ export const layer = Layer.effect(
               metadata: match.metadata?.providerExecuted
                 ? { ...value.providerMetadata, providerExecuted: true }
                 : value.providerMetadata,
-            }))
+            })).pipe(
+              Effect.tapError((error) =>
+                Effect.logError("tool call state update failed", {
+                  code: "ETOOL002",
+                  "session.id": ctx.sessionID,
+                  messageID: ctx.assistantMessage.id,
+                  callID: value.id,
+                  tool: value.name,
+                  rawLength: toolCall.call.raw.length,
+                  inputLength: jsonLength(input),
+                  providerExecuted: toolCall.part.metadata?.providerExecuted === true,
+                  error: errorMessage(error),
+                }),
+              ),
+            )
 
             const parts = yield* MessageV2.parts(ctx.assistantMessage.id).pipe(
               Effect.provideService(Database.Service, database),
@@ -627,8 +709,9 @@ export const layer = Layer.effect(
                 })
                 yield* failToolCall(value.id, error)
                 return
-              } else
-                yield* events.publish(SessionEvent.Tool.Success, {
+              }
+              yield* events
+                .publish(SessionEvent.Tool.Success, {
                   sessionID: ctx.sessionID,
                   assistantMessageID,
                   callID: value.id,
@@ -641,8 +724,37 @@ export const layer = Layer.effect(
                   },
                   timestamp: DateTime.makeUnsafe(Date.now()),
                 })
+                .pipe(
+                  Effect.tapError((error) =>
+                    Effect.logError("tool success event publish failed", {
+                      code: "ETOOL001",
+                      "session.id": ctx.sessionID,
+                      messageID: ctx.assistantMessage.id,
+                      callID: value.id,
+                      tool: value.name,
+                      outputLength: output.output.length,
+                      attachmentCount: output.attachments?.length ?? 0,
+                      metadataKeyCount: Object.keys(output.metadata).length,
+                      error: errorMessage(error),
+                    }),
+                  ),
+                )
             }
-            yield* completeToolCall(value.id, output)
+            yield* completeToolCall(value.id, output).pipe(
+              Effect.tapError((error) =>
+                Effect.logError("tool completion failed", {
+                  code: "ETOOL002",
+                  "session.id": ctx.sessionID,
+                  messageID: ctx.assistantMessage.id,
+                  callID: value.id,
+                  tool: value.name,
+                  outputLength: output.output.length,
+                  attachmentCount: output.attachments?.length ?? 0,
+                  metadataKeyCount: Object.keys(output.metadata).length,
+                  error: errorMessage(error),
+                }),
+              ),
+            )
             return
           }
 
@@ -885,13 +997,29 @@ export const layer = Layer.effect(
         for (const toolCallID of Object.keys(ctx.toolcalls)) {
           const match = yield* readToolCall(toolCallID)
           if (!match) continue
+          yield* Effect.logWarning("tool execution aborted during processor cleanup", {
+            code: "ETOOL002",
+            "session.id": ctx.sessionID,
+            messageID: ctx.assistantMessage.id,
+            partID: match.part.id,
+            callID: toolCallID,
+            tool: match.part.tool,
+            state: match.part.state.status,
+            inputEnded: match.call.inputEnded,
+            rawLength: match.call.raw.length,
+            inputLength: "input" in match.part.state ? jsonLength(match.part.state.input) : undefined,
+            providerExecuted: match.part.metadata?.providerExecuted === true,
+            aborted,
+            assistantError: ctx.assistantMessage.error ? errorMessage(ctx.assistantMessage.error) : undefined,
+            openToolCalls: Object.keys(ctx.toolcalls).length,
+          })
           const part = match.part
           if (mirrorAssistant && match.call.assistantMessageID) {
             yield* events.publish(SessionEvent.Tool.Failed, {
               sessionID: ctx.sessionID,
               assistantMessageID: match.call.assistantMessageID,
               callID: toolCallID,
-              error: { type: "unknown", message: "Tool execution aborted" },
+              error: { type: "unknown", message: TOOL_ABORT_EVENT_MESSAGE },
               provider: { executed: part.metadata?.providerExecuted === true },
               timestamp: DateTime.makeUnsafe(Date.now()),
             })
@@ -903,7 +1031,7 @@ export const layer = Layer.effect(
             state: {
               ...part.state,
               status: "error",
-              error: "Tool execution aborted",
+              error: TOOL_ABORT_PART_MESSAGE,
               metadata: { ...metadata, interrupted: true },
               time: { start: "time" in part.state ? part.state.time.start : end, end },
             },
@@ -921,6 +1049,32 @@ export const layer = Layer.effect(
           error: errorMessage(e),
           stack: e instanceof Error ? e.stack : undefined,
         })
+        yield* Effect.forEach(
+          Object.keys(ctx.toolcalls),
+          (toolCallID) =>
+            Effect.gen(function* () {
+              const match = yield* readToolCall(toolCallID)
+              if (!match) return
+              yield* Effect.logWarning("processor halted with active tool call", {
+                code: "ETOOL002",
+                "session.id": ctx.sessionID,
+                messageID: ctx.assistantMessage.id,
+                partID: match.part.id,
+                callID: toolCallID,
+                tool: match.part.tool,
+                state: match.part.state.status,
+                inputEnded: match.call.inputEnded,
+                rawLength: match.call.raw.length,
+                inputLength: "input" in match.part.state ? jsonLength(match.part.state.input) : undefined,
+                providerExecuted: match.part.metadata?.providerExecuted === true,
+                aborted,
+                cause: errorMessage(e),
+                causeName: e instanceof Error ? e.name : undefined,
+                openToolCalls: Object.keys(ctx.toolcalls).length,
+              })
+            }),
+          { concurrency: "unbounded" },
+        )
         const error = parse(e)
         yield* flushV2Fragments()
         if (SessionV1.ContextOverflowError.isInstance(error)) {

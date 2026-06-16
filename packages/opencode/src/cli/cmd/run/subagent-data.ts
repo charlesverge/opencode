@@ -298,7 +298,7 @@ function taskStatus(part: ToolPart): FooterSubagentTab["status"] {
   }
 
   if (part.state.status === "error") {
-    if (metadata(part, "interrupted") === true || text(part.state.error) === "Tool execution aborted") {
+    if (metadata(part, "interrupted") === true || text(part.state.error)?.endsWith("Tool execution aborted") === true) {
       return "cancelled"
     }
 
