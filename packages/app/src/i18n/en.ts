@@ -421,7 +421,7 @@ export const dict = {
   "dialog.releaseNotes.action.hideFuture": "Don't show these in the future",
   "dialog.releaseNotes.media.alt": "Release preview",
 
-  "context.breakdown.title": "Context Breakdown",
+  "context.breakdown.title": "Context Breakdownv1",
   "context.breakdown.note": 'Approximate breakdown of input tokens. "Other" includes tool definitions and overhead.',
   "context.breakdown.system": "System",
   "context.breakdown.user": "User",
@@ -430,6 +430,9 @@ export const dict = {
   "context.breakdown.other": "Other",
 
   "context.toolsBreakdown.title": "Tools Breakdown",
+
+  "context.toolsFailureBreakdown.title": "Tool Call Failures",
+  "context.toolsFailureBreakdown.summary": "Tool calls: {{total}} total · {{failed}} failed ({{percent}}%)",
 
   "context.systemPrompt.title": "System Prompt",
   "context.rawMessages.title": "Raw messages",

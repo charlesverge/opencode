@@ -16,7 +16,7 @@ import { useProviders } from "@/hooks/use-providers"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { getSessionContextMetrics } from "./session-context-metrics"
 import { estimateSessionContextBreakdown, type SessionContextBreakdownKey } from "./session-context-breakdown"
-import { estimateToolCallBreakdown, getToolColor } from "./session-tool-breakdown"
+import { estimateToolCallBreakdown, estimateToolFailureBreakdown, getToolColor } from "./session-tool-breakdown"
 import { createSessionContextFormatter } from "./session-context-format"
 
 const BREAKDOWN_COLOR: Record<SessionContextBreakdownKey, string> = {
@@ -64,15 +64,39 @@ function RawMessage(props: {
   onRendered: () => void
   time: (value: number | undefined) => string
 }) {
+  const preview = createMemo(() => {
+    const parts = props.getParts(props.message.id)
+    if (props.message.role === "user") {
+      const textPart = parts.find((part) => part.type === "text")
+      if (!textPart) return ""
+      return textPart.text
+    }
+    const toolParts = parts.filter((part) => part.type === "tool")
+    if (toolParts.length > 0) {
+      return toolParts.map((part) => part.tool).join(", ")
+    }
+    const textPart = parts.find((part) => part.type === "text")
+    if (!textPart) return ""
+    return textPart.text
+  })
+
+  const tokensLabel = () => {
+    if (props.message.role === "user") return "t: —"
+    const t = props.message.tokens
+    const total = t.total ?? (t.input + t.output + t.reasoning + t.cache.read + t.cache.write)
+    return `t: ${total} i: ${t.input} o: ${t.output} r: ${t.reasoning} cr: ${t.cache.read} cw: ${t.cache.write}`
+  }
+
   return (
     <Accordion.Item value={props.message.id}>
       <StickyAccordionHeader>
         <Accordion.Trigger>
           <div class="flex items-center justify-between gap-2 w-full">
             <div class="min-w-0 truncate">
-              {props.message.role} <span class="text-text-base">• {props.message.id}</span>
+              {props.message.role}{preview() ? ` • ${preview()}` : ""}
             </div>
             <div class="flex items-center gap-3">
+              <div class="shrink-0 text-12-regular text-text-weak">{tokensLabel()}</div>
               <div class="shrink-0 text-12-regular text-text-weak">{props.time(props.message.time.created)}</div>
               <Icon name="chevron-grabber-vertical" size="small" class="shrink-0 text-text-weak" />
             </div>
@@ -197,11 +221,13 @@ export function SessionContextTab() {
     return language.t("context.breakdown.other")
   }
 
-  const toolBreakdown = createMemo(() => {
-    const msgs = messages()
-    if (msgs.length === 0) return []
-    return estimateToolCallBreakdown(msgs, sync().data.part as Record<string, Part[] | undefined>)
-  })
+  const toolBreakdown = createMemo(() =>
+    estimateToolCallBreakdown(messages(), sync().data.part as Record<string, Part[] | undefined>),
+  )
+
+  const toolFailureBreakdown = createMemo(() =>
+    estimateToolFailureBreakdown(messages(), sync().data.part as Record<string, Part[] | undefined>),
+  )
 
   const stats = [
     { label: "context.stats.session", value: () => info()?.title ?? params.id ?? "—" },
@@ -320,6 +346,92 @@ export function SessionContextTab() {
             <div class="hidden text-11-regular text-text-weaker">{language.t("context.breakdown.note")}</div>
           </div>
         </Show>
+
+        {(() => {
+          const failureSegments = toolFailureBreakdown()
+          if (failureSegments.length === 0) return null
+          const totalCalls = failureSegments.reduce((sum, s) => sum + s.success + s.fail, 0)
+          const totalFailed = failureSegments.reduce((sum, s) => sum + s.fail, 0)
+          const failPercent = totalCalls > 0 ? Math.round((totalFailed / totalCalls) * 1000) / 10 : 0
+          return (
+            <div class="flex flex-col gap-2">
+              <div class="text-12-regular text-text-weak">{language.t("context.toolsFailureBreakdown.title")}</div>
+              <div class="text-12-regular text-text-weak">
+                {language.t("context.toolsFailureBreakdown.summary", {
+                  total: totalCalls.toLocaleString(language.intl()),
+                  failed: totalFailed.toLocaleString(language.intl()),
+                  percent: failPercent,
+                })}
+              </div>
+              <div class="h-2 w-full rounded-full bg-surface-base overflow-hidden flex">
+                <For each={failureSegments}>
+                  {(segment, index) => {
+                    const total = segment.success + segment.fail
+                    if (total === 0) return null
+                    const successWidth = (segment.success / total) * segment.width
+                    const failWidth = (segment.fail / total) * segment.width
+                    return (
+                      <>
+                        <div
+                          class="h-full"
+                          style={{
+                            width: `${successWidth}%`,
+                            "background-color": getToolColor(segment.tool, index()),
+                          }}
+                        />
+                        <Show when={segment.fail > 0}>
+                          <div
+                            class="h-full"
+                            style={{
+                              width: `${failWidth}%`,
+                              "background-color": `color-mix(in srgb, ${getToolColor(segment.tool, index())} 60%, var(--syntax-critical) 40%)`,
+                            }}
+                          />
+                        </Show>
+                      </>
+                    )
+                  }}
+                </For>
+              </div>
+              <div class="flex flex-wrap gap-x-3 gap-y-1">
+                <For each={failureSegments}>
+                  {(segment, index) => {
+                    const total = segment.success + segment.fail
+                    if (total === 0) return null
+                    const successPercent = ((segment.success / total) * segment.percent).toFixed(1)
+                    const failPercent = ((segment.fail / total) * segment.percent).toFixed(1)
+                    return (
+                      <>
+                        <div class="flex items-center gap-1 text-11-regular text-text-weak">
+                          <div
+                            class="size-2 rounded-sm"
+                            style={{ "background-color": getToolColor(segment.tool, index()) }}
+                          />
+                          <div>{segment.tool} (S)</div>
+                          <div class="text-text-weaker">
+                            {segment.success.toLocaleString(language.intl())} ({successPercent}%)
+                          </div>
+                        </div>
+                        <Show when={segment.fail > 0}>
+                          <div class="flex items-center gap-1 text-11-regular text-text-weak">
+                            <div
+                              class="size-2 rounded-sm"
+                              style={{ "background-color": `color-mix(in srgb, ${getToolColor(segment.tool, index())} 60%, var(--syntax-critical) 40%)` }}
+                            />
+                            <div>{segment.tool} (F)</div>
+                            <div class="text-text-weaker">
+                              {segment.fail.toLocaleString(language.intl())} ({failPercent}%)
+                            </div>
+                          </div>
+                        </Show>
+                      </>
+                    )
+                  }}
+                </For>
+              </div>
+            </div>
+          )
+        })()}
 
         <Show when={toolBreakdown().length > 0}>
           <div class="flex flex-col gap-2">
