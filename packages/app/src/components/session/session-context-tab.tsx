@@ -16,6 +16,7 @@ import { useProviders } from "@/hooks/use-providers"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { getSessionContextMetrics } from "./session-context-metrics"
 import { estimateSessionContextBreakdown, type SessionContextBreakdownKey } from "./session-context-breakdown"
+import { estimateToolCallBreakdown, getToolColor } from "./session-tool-breakdown"
 import { createSessionContextFormatter } from "./session-context-format"
 
 const BREAKDOWN_COLOR: Record<SessionContextBreakdownKey, string> = {
@@ -196,6 +197,12 @@ export function SessionContextTab() {
     return language.t("context.breakdown.other")
   }
 
+  const toolBreakdown = createMemo(() => {
+    const msgs = messages()
+    if (msgs.length === 0) return []
+    return estimateToolCallBreakdown(msgs, sync().data.part as Record<string, Part[] | undefined>)
+  })
+
   const stats = [
     { label: "context.stats.session", value: () => info()?.title ?? params.id ?? "—" },
     { label: "context.stats.messages", value: () => counts().all.toLocaleString(language.intl()) },
@@ -311,6 +318,36 @@ export function SessionContextTab() {
               </For>
             </div>
             <div class="hidden text-11-regular text-text-weaker">{language.t("context.breakdown.note")}</div>
+          </div>
+        </Show>
+
+        <Show when={toolBreakdown().length > 0}>
+          <div class="flex flex-col gap-2">
+            <div class="text-12-regular text-text-weak">{language.t("context.toolsBreakdown.title")}</div>
+            <div class="h-2 w-full rounded-full bg-surface-base overflow-hidden flex">
+              <For each={toolBreakdown()}>
+                {(segment, index) => (
+                  <div
+                    class="h-full"
+                    style={{
+                      width: `${segment.width}%`,
+                      "background-color": getToolColor(segment.tool, index()),
+                    }}
+                  />
+                )}
+              </For>
+            </div>
+            <div class="flex flex-wrap gap-x-3 gap-y-1">
+              <For each={toolBreakdown()}>
+                {(segment, index) => (
+                  <div class="flex items-center gap-1 text-11-regular text-text-weak">
+                    <div class="size-2 rounded-sm" style={{ "background-color": getToolColor(segment.tool, index()) }} />
+                    <div>{segment.tool}</div>
+                    <div class="text-text-weaker">{segment.percent.toLocaleString(language.intl())}%</div>
+                  </div>
+                )}
+              </For>
+            </div>
           </div>
         </Show>
 

@@ -429,6 +429,8 @@ export const dict = {
   "context.breakdown.tool": "Tool Calls",
   "context.breakdown.other": "Other",
 
+  "context.toolsBreakdown.title": "Tools Breakdown",
+
   "context.systemPrompt.title": "System Prompt",
   "context.rawMessages.title": "Raw messages",
 
