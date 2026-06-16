@@ -16,7 +16,8 @@ import { useProviders } from "@/hooks/use-providers"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { getSessionContextMetrics } from "./session-context-metrics"
 import { estimateSessionContextBreakdown, type SessionContextBreakdownKey } from "./session-context-breakdown"
-import { estimateToolCallBreakdown, estimateToolFailureBreakdown, getToolColor } from "./session-tool-breakdown"
+import { estimateToolCallBreakdown, estimateToolFailureBreakdown, estimateToolInputTokenBreakdown, estimateToolOutputTokenBreakdown, getToolColor } from "./session-tool-breakdown"
+import { estimateToolTokenSummary } from "./session-tool-token-summary"
 import { createSessionContextFormatter } from "./session-context-format"
 
 const BREAKDOWN_COLOR: Record<SessionContextBreakdownKey, string> = {
@@ -63,21 +64,77 @@ function RawMessage(props: {
   getParts: (id: string) => Part[]
   onRendered: () => void
   time: (value: number | undefined) => string
+  toolOrder: () => string[]
 }) {
   const preview = createMemo(() => {
     const parts = props.getParts(props.message.id)
     if (props.message.role === "user") {
       const textPart = parts.find((part) => part.type === "text")
-      if (!textPart) return ""
-      return textPart.text
+      if (!textPart) return <></>
+      return <>{textPart.text}</>
     }
     const toolParts = parts.filter((part) => part.type === "tool")
     if (toolParts.length > 0) {
-      return toolParts.map((part) => part.tool).join(", ")
+      return (
+        <>
+          {toolParts.map((part, i) => {
+            const input = part.state.input
+            const color = getToolColor(part.tool, props.toolOrder().indexOf(part.tool))
+            let label = ""
+            let value = ""
+            switch (part.tool) {
+              case "grep":
+                label = "pattern"
+                value = `"${input.pattern as string}"`
+                break
+              case "read":
+              case "write":
+              case "edit": {
+                const filePath = input.filePath as string | undefined
+                if (!filePath) break
+                label = "file"
+                value = filePath.split("/").slice(-3).join("/")
+                break
+              }
+              case "bash":
+                label = "cmd"
+                value = input.command as string
+                break
+              case "glob":
+                label = "pattern"
+                value = input.pattern as string
+                break
+              case "task":
+                label = "desc"
+                value = input.description as string
+                break
+              case "todowrite": {
+                const todos = input.todos as Array<{ status: string; content: string }> | undefined
+                if (todos && todos.length > 0) {
+                  label = `${todos[0].status}`
+                  value = todos[0].content
+                }
+                break
+              }
+            }
+            return (
+              <>
+                {i > 0 && ", "}
+                <span style={{ color }}>{part.tool}</span>
+                {label && (
+                  <>
+                    : <span class="font-medium">{label}</span>: {value}
+                  </>
+                )}
+              </>
+            )
+          })}
+        </>
+      )
     }
     const textPart = parts.find((part) => part.type === "text")
-    if (!textPart) return ""
-    return textPart.text
+    if (!textPart) return <></>
+    return <>{textPart.text}</>
   })
 
   const tokensLabel = () => {
@@ -93,7 +150,7 @@ function RawMessage(props: {
         <Accordion.Trigger>
           <div class="flex items-center justify-between gap-2 w-full">
             <div class="min-w-0 truncate">
-              {props.message.role}{preview() ? ` • ${preview()}` : ""}
+              {props.message.role} • {preview()}
             </div>
             <div class="flex items-center gap-3">
               <div class="shrink-0 text-12-regular text-text-weak">{tokensLabel()}</div>
@@ -225,8 +282,22 @@ export function SessionContextTab() {
     estimateToolCallBreakdown(messages(), sync().data.part as Record<string, Part[] | undefined>),
   )
 
+  const toolOrder = createMemo(() => toolBreakdown().map((s) => s.tool))
+
   const toolFailureBreakdown = createMemo(() =>
     estimateToolFailureBreakdown(messages(), sync().data.part as Record<string, Part[] | undefined>),
+  )
+
+  const inputTokenBreakdown = createMemo(() =>
+    estimateToolInputTokenBreakdown(messages(), sync().data.part as Record<string, Part[] | undefined>),
+  )
+
+  const outputTokenBreakdown = createMemo(() =>
+    estimateToolOutputTokenBreakdown(messages(), sync().data.part as Record<string, Part[] | undefined>),
+  )
+
+  const toolTokenSummary = createMemo(() =>
+    estimateToolTokenSummary(messages(), sync().data.part as Record<string, Part[] | undefined>),
   )
 
   const stats = [
@@ -347,6 +418,70 @@ export function SessionContextTab() {
           </div>
         </Show>
 
+        <Show when={inputTokenBreakdown().length > 0}>
+          <div class="flex flex-col gap-2">
+            <div class="text-12-regular text-text-weak">{language.t("context.toolInputTokens.title")}</div>
+            <div class="h-2 w-full rounded-full bg-surface-base overflow-hidden flex">
+              <For each={inputTokenBreakdown()}>
+                {(segment) => (
+                  <div
+                    class="h-full"
+                    style={{
+                      width: `${segment.width}%`,
+                      "background-color": getToolColor(segment.tool, toolOrder().indexOf(segment.tool)),
+                    }}
+                  />
+                )}
+              </For>
+            </div>
+            <div class="flex flex-wrap gap-x-3 gap-y-1">
+              <For each={inputTokenBreakdown()}>
+                {(segment) => (
+                  <div class="flex items-center gap-1 text-11-regular text-text-weak">
+                    <div class="size-2 rounded-sm" style={{ "background-color": getToolColor(segment.tool, toolOrder().indexOf(segment.tool)) }} />
+                    <div>{segment.tool}</div>
+                    <div class="text-text-weaker">
+                      {segment.tokens.toLocaleString(language.intl())} tokens ({segment.percent}%)
+                    </div>
+                  </div>
+                )}
+              </For>
+            </div>
+          </div>
+        </Show>
+
+        <Show when={outputTokenBreakdown().length > 0}>
+          <div class="flex flex-col gap-2">
+            <div class="text-12-regular text-text-weak">{language.t("context.toolOutputTokens.title")}</div>
+            <div class="h-2 w-full rounded-full bg-surface-base overflow-hidden flex">
+              <For each={outputTokenBreakdown()}>
+                {(segment) => (
+                  <div
+                    class="h-full"
+                    style={{
+                      width: `${segment.width}%`,
+                      "background-color": getToolColor(segment.tool, toolOrder().indexOf(segment.tool)),
+                    }}
+                  />
+                )}
+              </For>
+            </div>
+            <div class="flex flex-wrap gap-x-3 gap-y-1">
+              <For each={outputTokenBreakdown()}>
+                {(segment) => (
+                  <div class="flex items-center gap-1 text-11-regular text-text-weak">
+                    <div class="size-2 rounded-sm" style={{ "background-color": getToolColor(segment.tool, toolOrder().indexOf(segment.tool)) }} />
+                    <div>{segment.tool}</div>
+                    <div class="text-text-weaker">
+                      {segment.tokens.toLocaleString(language.intl())} tokens ({segment.percent}%)
+                    </div>
+                  </div>
+                )}
+              </For>
+            </div>
+          </div>
+        </Show>
+
         {(() => {
           const failureSegments = toolFailureBreakdown()
           if (failureSegments.length === 0) return null
@@ -365,7 +500,7 @@ export function SessionContextTab() {
               </div>
               <div class="h-2 w-full rounded-full bg-surface-base overflow-hidden flex">
                 <For each={failureSegments}>
-                  {(segment, index) => {
+                  {(segment) => {
                     const total = segment.success + segment.fail
                     if (total === 0) return null
                     const successWidth = (segment.success / total) * segment.width
@@ -376,7 +511,7 @@ export function SessionContextTab() {
                           class="h-full"
                           style={{
                             width: `${successWidth}%`,
-                            "background-color": getToolColor(segment.tool, index()),
+                      "background-color": getToolColor(segment.tool, toolOrder().indexOf(segment.tool)),
                           }}
                         />
                         <Show when={segment.fail > 0}>
@@ -384,7 +519,7 @@ export function SessionContextTab() {
                             class="h-full"
                             style={{
                               width: `${failWidth}%`,
-                              "background-color": `color-mix(in srgb, ${getToolColor(segment.tool, index())} 60%, var(--syntax-critical) 40%)`,
+                              "background-color": `color-mix(in srgb, ${getToolColor(segment.tool, toolOrder().indexOf(segment.tool))} 60%, var(--syntax-critical) 40%)`,
                             }}
                           />
                         </Show>
@@ -395,7 +530,7 @@ export function SessionContextTab() {
               </div>
               <div class="flex flex-wrap gap-x-3 gap-y-1">
                 <For each={failureSegments}>
-                  {(segment, index) => {
+                  {(segment) => {
                     const total = segment.success + segment.fail
                     if (total === 0) return null
                     const successPercent = ((segment.success / total) * segment.percent).toFixed(1)
@@ -405,7 +540,7 @@ export function SessionContextTab() {
                         <div class="flex items-center gap-1 text-11-regular text-text-weak">
                           <div
                             class="size-2 rounded-sm"
-                            style={{ "background-color": getToolColor(segment.tool, index()) }}
+                            style={{ "background-color": getToolColor(segment.tool, toolOrder().indexOf(segment.tool)) }}
                           />
                           <div>{segment.tool} (S)</div>
                           <div class="text-text-weaker">
@@ -416,7 +551,7 @@ export function SessionContextTab() {
                           <div class="flex items-center gap-1 text-11-regular text-text-weak">
                             <div
                               class="size-2 rounded-sm"
-                              style={{ "background-color": `color-mix(in srgb, ${getToolColor(segment.tool, index())} 60%, var(--syntax-critical) 40%)` }}
+                              style={{ "background-color": `color-mix(in srgb, ${getToolColor(segment.tool, toolOrder().indexOf(segment.tool))} 60%, var(--syntax-critical) 40%)` }}
                             />
                             <div>{segment.tool} (F)</div>
                             <div class="text-text-weaker">
@@ -433,17 +568,64 @@ export function SessionContextTab() {
           )
         })()}
 
+        <Show when={toolTokenSummary().length > 0}>
+          <div class="flex flex-col gap-2">
+            <div class="text-12-regular text-text-weak">{language.t("context.toolTokenSummary.title")}</div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-11-regular border-collapse">
+                <thead>
+                  <tr class="border-b border-border-base">
+                    <th class="text-left py-1 px-2 text-text-weak font-normal">Tool</th>
+                    <th class="text-right py-1 px-2 text-text-weak font-normal">Calls</th>
+                    <th class="text-right py-1 px-2 text-text-weak font-normal">Total</th>
+                    <th class="text-right py-1 px-2 text-text-weak font-normal">Share</th>
+                    <th class="text-right py-1 px-2 text-text-weak font-normal">Avg</th>
+                    <th class="text-right py-1 px-2 text-text-weak font-normal">Median</th>
+                    <th class="text-right py-1 px-2 text-text-weak font-normal">P95</th>
+                    <th class="text-right py-1 px-2 text-text-weak font-normal">Max</th>
+                    <th class="text-right py-1 px-2 text-text-weak font-normal">Max/Med</th>
+                    <th class="text-left py-1 px-2 text-text-weak font-normal">Pattern</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <For each={toolTokenSummary()}>
+                    {(row) => (
+                      <tr class="border-b border-border-base/50">
+                        <td class="py-1 px-2 text-text-strong">{row.tool}</td>
+                        <td class="text-right py-1 px-2 text-text-weak">
+                          {row.calls}
+                          <Show when={row.failed > 0}>
+                            <span class="text-syntax-critical"> ({row.failed})</span>
+                          </Show>
+                        </td>
+                        <td class="text-right py-1 px-2 text-text-weak">{row.totalTokens.toLocaleString(language.intl())}</td>
+                        <td class="text-right py-1 px-2 text-text-weak">{row.sessionShare.toFixed(1)}%</td>
+                        <td class="text-right py-1 px-2 text-text-weak">{row.avgPerCall.toFixed(0)}</td>
+                        <td class="text-right py-1 px-2 text-text-weak">{row.medianPerCall.toFixed(0)}</td>
+                        <td class="text-right py-1 px-2 text-text-weak">{row.p95PerCall.toFixed(0)}</td>
+                        <td class="text-right py-1 px-2 text-text-weak">{row.maxPerCall.toLocaleString(language.intl())}</td>
+                        <td class="text-right py-1 px-2 text-text-weak">{row.maxToMedianRatio?.toFixed(1) ?? "—"}</td>
+                        <td class="py-1 px-2 text-text-weak">{row.pattern}</td>
+                      </tr>
+                    )}
+                  </For>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </Show>
+
         <Show when={toolBreakdown().length > 0}>
           <div class="flex flex-col gap-2">
             <div class="text-12-regular text-text-weak">{language.t("context.toolsBreakdown.title")}</div>
             <div class="h-2 w-full rounded-full bg-surface-base overflow-hidden flex">
               <For each={toolBreakdown()}>
-                {(segment, index) => (
+                {(segment) => (
                   <div
                     class="h-full"
                     style={{
                       width: `${segment.width}%`,
-                      "background-color": getToolColor(segment.tool, index()),
+                      "background-color": getToolColor(segment.tool, toolOrder().indexOf(segment.tool)),
                     }}
                   />
                 )}
@@ -451,9 +633,9 @@ export function SessionContextTab() {
             </div>
             <div class="flex flex-wrap gap-x-3 gap-y-1">
               <For each={toolBreakdown()}>
-                {(segment, index) => (
+                {(segment) => (
                   <div class="flex items-center gap-1 text-11-regular text-text-weak">
-                    <div class="size-2 rounded-sm" style={{ "background-color": getToolColor(segment.tool, index()) }} />
+                    <div class="size-2 rounded-sm" style={{ "background-color": getToolColor(segment.tool, toolOrder().indexOf(segment.tool)) }} />
                     <div>{segment.tool}</div>
                     <div class="text-text-weaker">{segment.percent.toLocaleString(language.intl())}%</div>
                   </div>
@@ -479,7 +661,7 @@ export function SessionContextTab() {
           <Accordion multiple>
             <For each={messages()}>
               {(message) => (
-                <RawMessage message={message} getParts={getParts} onRendered={restoreScroll} time={formatter().time} />
+                <RawMessage message={message} getParts={getParts} onRendered={restoreScroll} time={formatter().time} toolOrder={toolOrder} />
               )}
             </For>
           </Accordion>

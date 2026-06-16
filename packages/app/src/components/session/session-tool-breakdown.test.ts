@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Message, Part } from "@opencode-ai/sdk/v2/client"
-import { estimateToolCallBreakdown, estimateToolFailureBreakdown } from "./session-tool-breakdown"
+import { estimateToolCallBreakdown, estimateToolFailureBreakdown, estimateToolInputTokenBreakdown, estimateToolOutputTokenBreakdown } from "./session-tool-breakdown"
 
 const user = (id: string) => {
   return {
@@ -30,6 +30,24 @@ const toolPart = (tool: string, status: "completed" | "error" | "pending" | "run
     tool,
     state,
   } as unknown as Part
+}
+
+const toolPartWithData = (
+  tool: string,
+  status: "completed" | "error" | "pending" | "running",
+  data: { input?: Record<string, unknown>; raw?: string; output?: string; error?: string },
+) => {
+  let state: Record<string, unknown>
+  if (status === "completed") {
+    state = { status: "completed", input: data.input ?? {}, output: data.output ?? "", time: { start: 1, end: 2 } }
+  } else if (status === "error") {
+    state = { status: "error", input: data.input ?? {}, error: data.error ?? "", time: { start: 1, end: 2 } }
+  } else if (status === "running") {
+    state = { status: "running", input: data.input ?? {}, time: { start: 1 } }
+  } else {
+    state = { status: "pending", input: data.input ?? {}, raw: data.raw ?? "" }
+  }
+  return { type: "tool", tool, state } as unknown as Part
 }
 
 describe("estimateToolCallBreakdown", () => {
@@ -211,5 +229,165 @@ describe("estimateToolFailureBreakdown", () => {
     expect(output[0].success).toBe(0)
     expect(output[0].fail).toBe(2)
     expect(output[0].percent).toBe(100)
+  })
+})
+
+describe("estimateToolInputTokenBreakdown", () => {
+  test("returns empty for no messages", () => {
+    expect(estimateToolInputTokenBreakdown([], {})).toEqual([])
+  })
+
+  test("returns empty when no tool parts", () => {
+    const messages = [assistant("a1")]
+    const parts = { a1: [{ type: "text", text: "hi" }] as unknown as Part[] }
+    expect(estimateToolInputTokenBreakdown(messages, parts)).toEqual([])
+  })
+
+  test("estimates input tokens from completed tool input", () => {
+    const messages = [assistant("a1")]
+    const parts = {
+      a1: [toolPartWithData("bash", "completed", { input: { command: "ls -la" } })],
+    }
+    const output = estimateToolInputTokenBreakdown(messages, parts)
+    expect(output).toHaveLength(1)
+    expect(output[0].tool).toBe("bash")
+    expect(output[0].tokens).toBe(Math.ceil(JSON.stringify({ command: "ls -la" }).length / 4))
+    expect(output[0].percent).toBe(100)
+  })
+
+  test("uses raw string for pending state", () => {
+    const raw = '{"command":"echo hello"}'
+    const messages = [assistant("a1")]
+    const parts = {
+      a1: [toolPartWithData("bash", "pending", { raw })],
+    }
+    const output = estimateToolInputTokenBreakdown(messages, parts)
+    expect(output).toHaveLength(1)
+    expect(output[0].tokens).toBe(Math.ceil(raw.length / 4))
+  })
+
+  test("uses stringified input for running state", () => {
+    const input = { file: "test.ts" }
+    const messages = [assistant("a1")]
+    const parts = {
+      a1: [toolPartWithData("read", "running", { input })],
+    }
+    const output = estimateToolInputTokenBreakdown(messages, parts)
+    expect(output).toHaveLength(1)
+    expect(output[0].tokens).toBe(Math.ceil(JSON.stringify(input).length / 4))
+  })
+
+  test("uses stringified input for error state", () => {
+    const input = { pattern: "foo" }
+    const messages = [assistant("a1")]
+    const parts = {
+      a1: [toolPartWithData("grep", "error", { input, error: "not found" })],
+    }
+    const output = estimateToolInputTokenBreakdown(messages, parts)
+    expect(output).toHaveLength(1)
+    expect(output[0].tokens).toBe(Math.ceil(JSON.stringify(input).length / 4))
+  })
+
+  test("sorts by tokens descending then alphabetically", () => {
+    const messages = [assistant("a1")]
+    const parts = {
+      a1: [
+        toolPartWithData("small", "completed", { input: { x: "a" } }),
+        toolPartWithData("big", "completed", { input: { data: "x".repeat(100) } }),
+        toolPartWithData("big2", "completed", { input: { data: "y".repeat(100) } }),
+      ],
+    }
+    const output = estimateToolInputTokenBreakdown(messages, parts)
+    expect(output[0].tool).toBe("big")
+    expect(output[1].tool).toBe("big2")
+    expect(output[2].tool).toBe("small")
+  })
+
+  test("aggregates across multiple messages", () => {
+    const messages = [assistant("a1"), assistant("a2")]
+    const parts = {
+      a1: [toolPartWithData("bash", "completed", { input: { command: "ls" } })],
+      a2: [toolPartWithData("bash", "completed", { input: { command: "pwd" } })],
+    }
+    const output = estimateToolInputTokenBreakdown(messages, parts)
+    expect(output).toHaveLength(1)
+    expect(output[0].tool).toBe("bash")
+    const expected = Math.ceil(JSON.stringify({ command: "ls" }).length / 4) + Math.ceil(JSON.stringify({ command: "pwd" }).length / 4)
+    expect(output[0].tokens).toBe(expected)
+  })
+})
+
+describe("estimateToolOutputTokenBreakdown", () => {
+  test("returns empty for no messages", () => {
+    expect(estimateToolOutputTokenBreakdown([], {})).toEqual([])
+  })
+
+  test("returns empty when no tool parts", () => {
+    const messages = [assistant("a1")]
+    const parts = { a1: [{ type: "text", text: "hi" }] as unknown as Part[] }
+    expect(estimateToolOutputTokenBreakdown(messages, parts)).toEqual([])
+  })
+
+  test("estimates output tokens from completed tool output", () => {
+    const outputText = "file1.txt\nfile2.txt\nfile3.txt"
+    const messages = [assistant("a1")]
+    const parts = {
+      a1: [toolPartWithData("bash", "completed", { output: outputText })],
+    }
+    const output = estimateToolOutputTokenBreakdown(messages, parts)
+    expect(output).toHaveLength(1)
+    expect(output[0].tool).toBe("bash")
+    expect(output[0].tokens).toBe(Math.ceil(outputText.length / 4))
+    expect(output[0].percent).toBe(100)
+  })
+
+  test("uses error string for error state", () => {
+    const errorText = "command not found: foo"
+    const messages = [assistant("a1")]
+    const parts = {
+      a1: [toolPartWithData("bash", "error", { error: errorText })],
+    }
+    const output = estimateToolOutputTokenBreakdown(messages, parts)
+    expect(output).toHaveLength(1)
+    expect(output[0].tokens).toBe(Math.ceil(errorText.length / 4))
+  })
+
+  test("skips pending and running states", () => {
+    const messages = [assistant("a1")]
+    const parts = {
+      a1: [
+        toolPartWithData("bash", "pending", { raw: "{}" }),
+        toolPartWithData("read", "running", { input: { file: "test.ts" } }),
+      ],
+    }
+    expect(estimateToolOutputTokenBreakdown(messages, parts)).toEqual([])
+  })
+
+  test("sorts by tokens descending then alphabetically", () => {
+    const messages = [assistant("a1")]
+    const parts = {
+      a1: [
+        toolPartWithData("small", "completed", { output: "hi" }),
+        toolPartWithData("big", "completed", { output: "x".repeat(100) }),
+        toolPartWithData("big2", "completed", { output: "y".repeat(100) }),
+      ],
+    }
+    const output = estimateToolOutputTokenBreakdown(messages, parts)
+    expect(output[0].tool).toBe("big")
+    expect(output[1].tool).toBe("big2")
+    expect(output[2].tool).toBe("small")
+  })
+
+  test("aggregates across multiple messages", () => {
+    const messages = [assistant("a1"), assistant("a2")]
+    const parts = {
+      a1: [toolPartWithData("bash", "completed", { output: "line1" })],
+      a2: [toolPartWithData("bash", "completed", { output: "line2" })],
+    }
+    const output = estimateToolOutputTokenBreakdown(messages, parts)
+    expect(output).toHaveLength(1)
+    expect(output[0].tool).toBe("bash")
+    const expected = Math.ceil("line1".length / 4) + Math.ceil("line2".length / 4)
+    expect(output[0].tokens).toBe(expected)
   })
 })
