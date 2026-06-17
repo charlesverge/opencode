@@ -145,8 +145,29 @@ const generation = (input: RequestInput) => {
 const baseURL = (input: Provider.Model | RequestInput) =>
   "model" in input ? (input.baseURL ?? (input.model.api.url || undefined)) : input.api.url || undefined
 
+const defaultBaseURLs: Record<string, string> = {
+  deepinfra: "https://api.deepinfra.com/v1/openai",
+  groq: "https://api.groq.com/openai/v1",
+  togetherai: "https://api.together.xyz/v1",
+  cerebras: "https://api.cerebras.ai/v1",
+  fireworks: "https://api.fireworks.ai/inference/v1",
+  baseten: "https://inference.baseten.co/v1",
+}
+
+const openaiCompatiblePackages = [
+  "@ai-sdk/openai-compatible",
+  "@ai-sdk/deepinfra",
+  "@ai-sdk/groq",
+  "@ai-sdk/togetherai",
+  "@ai-sdk/cerebras",
+  "@ai-sdk/fireworks",
+  "@ai-sdk/baseten",
+]
+
 const requireBaseURL = (model: Provider.Model, url: string | undefined) => {
   if (url) return url
+  const defaultURL = defaultBaseURLs[model.providerID]
+  if (defaultURL) return defaultURL
   throw new Error(`Native LLM request adapter requires a base URL for ${model.providerID}/${model.id}`)
 }
 
@@ -168,7 +189,7 @@ export const model = (input: Provider.Model | RequestInput, headers?: Record<str
   if (model.api.npm === "@ai-sdk/anthropic") return Anthropic.configure(options).model(model.api.id)
   if (model.api.npm === "@ai-sdk/google") return Google.configure(options).model(model.api.id)
   if (model.api.npm === "@ai-sdk/amazon-bedrock") return AmazonBedrock.configure(options).model(model.api.id)
-  if (model.api.npm === "@ai-sdk/openai-compatible")
+  if (openaiCompatiblePackages.includes(model.api.npm))
     return OpenAICompatible.configure({
       ...options,
       provider: String(model.providerID),

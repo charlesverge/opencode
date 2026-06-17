@@ -418,7 +418,7 @@ describe("session.llm-native.request", () => {
         provider: { ...providerInfo, id: ProviderV2.ID.make("google") },
         auth: undefined,
       }),
-    ).toEqual({ type: "unsupported", reason: "provider is not openai, opencode, or anthropic" })
+    ).toEqual({ type: "unsupported", reason: "provider is not supported by native runtime" })
     expect(
       LLMNativeRuntime.status({
         model: baseModel,
@@ -440,7 +440,7 @@ describe("session.llm-native.request", () => {
         provider: providerInfo,
         auth: undefined,
       }),
-    ).toEqual({ type: "unsupported", reason: "provider package is not OpenAI, OpenAI-compatible, or Anthropic" })
+    ).toEqual({ type: "unsupported", reason: "provider package is not supported by native runtime" })
 
     expect(
       LLMNativeRuntime.status({
