@@ -52,11 +52,24 @@ function statusWithFetch(
   fetch: typeof globalThis.fetch | undefined,
 ): RuntimeStatus {
   const providerID = input.model.providerID
-  if (providerID !== "openai" && providerID !== "anthropic" && !providerID.startsWith("opencode"))
-    return { type: "unsupported", reason: "provider is not openai, opencode, or anthropic" }
+  const supportedProviders = ["openai", "anthropic", "deepinfra", "groq", "togetherai", "cerebras", "fireworks", "baseten"]
+  const isSupportedProvider = supportedProviders.includes(providerID) || providerID.startsWith("opencode")
+  if (!isSupportedProvider)
+    return { type: "unsupported", reason: "provider is not supported by native runtime" }
   const npm = input.model.api.npm
-  if (npm !== "@ai-sdk/openai" && npm !== "@ai-sdk/openai-compatible" && npm !== "@ai-sdk/anthropic")
-    return { type: "unsupported", reason: "provider package is not OpenAI, OpenAI-compatible, or Anthropic" }
+  const supportedPackages = [
+    "@ai-sdk/openai",
+    "@ai-sdk/openai-compatible",
+    "@ai-sdk/anthropic",
+    "@ai-sdk/deepinfra",
+    "@ai-sdk/groq",
+    "@ai-sdk/togetherai",
+    "@ai-sdk/cerebras",
+    "@ai-sdk/fireworks",
+    "@ai-sdk/baseten",
+  ]
+  if (!supportedPackages.includes(npm))
+    return { type: "unsupported", reason: "provider package is not supported by native runtime" }
   if (input.auth?.type === "oauth" && !(input.provider.id === "openai" && fetch)) {
     return { type: "unsupported", reason: "OAuth auth requires a provider fetch override" }
   }
