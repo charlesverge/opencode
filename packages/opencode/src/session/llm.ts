@@ -1,5 +1,5 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { llmClient } from "@opencode-ai/core/effect/layer-node-platform"
+import { llmClient } from "@opencode-ai/core/effect/app-node-platform"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Provider } from "@/provider/provider"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
@@ -8,7 +8,7 @@ import { Context, Effect, Layer } from "effect"
 import * as Stream from "effect/Stream"
 import { streamText, wrapLanguageModel, type ModelMessage, type Tool } from "ai"
 import type { LLMEvent } from "@opencode-ai/llm"
-import { LLMClient, RequestExecutor, WebSocketExecutor } from "@opencode-ai/llm/route"
+import { LLMClient } from "@opencode-ai/llm/route"
 import type { LLMClientService } from "@opencode-ai/llm/route"
 import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
 import { ProviderTransform } from "@/provider/transform"
@@ -414,17 +414,22 @@ export const defaultLayer = Layer.suspend(() =>
   ),
 )
 
+
 export const hasToolCalls = LLMRequestPrep.hasToolCalls
 
-export const node = LayerNode.make(layer, [
-  Auth.node,
-  Config.node,
-  Provider.node,
-  Plugin.node,
-  Permission.node,
-  EventV2Bridge.node,
-  llmClient,
-  RuntimeFlags.node,
-])
+export const node = LayerNode.make({
+  service: Service,
+  layer: live,
+  deps: [
+    Auth.node,
+    Config.node,
+    Provider.node,
+    Plugin.node,
+    Permission.node,
+    EventV2Bridge.node,
+    llmClient,
+    RuntimeFlags.node,
+  ],
+})
 
 export * as LLM from "./llm"
