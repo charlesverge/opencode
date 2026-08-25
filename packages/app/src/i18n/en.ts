@@ -490,6 +490,17 @@ export const dict = {
   "context.breakdown.tool": "Tool Calls",
   "context.breakdown.other": "Other",
 
+  "context.toolsBreakdown.title": "Tools Breakdown",
+
+  "context.toolInputTokens.title": "Input Tokens by Tool",
+
+  "context.toolOutputTokens.title": "Output Tokens by Tool",
+
+  "context.toolsFailureBreakdown.title": "Tool Call Failures",
+  "context.toolsFailureBreakdown.summary": "Tool calls: {{total}} total · {{failed}} failed ({{percent}}%)",
+
+  "context.toolTokenSummary.title": "Tool Token Summary",
+
   "context.systemPrompt.title": "System Prompt",
   "context.rawMessages.title": "Raw messages",
   "context.export.session": "Export session",
